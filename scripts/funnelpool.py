@@ -13,7 +13,7 @@ import argparse
 parser = argparse.ArgumentParser(description='Process some integers.')
 parser.add_argument('--ndim',  default=2, type=int, help='Dimensions')
 parser.add_argument('--nsamples',  default=10000, type=int, help='Number of ssmples')
-parser.add_argument('--burnin',  default=5000, type=int, help='Number of burning samples')
+parser.add_argument('--burnin',  default=1000, type=int, help='Number of burning samples')
 parser.add_argument('--lpath',  default=5, type=float, help='Nleapfrog*step_size')
 parser.add_argument('--step_size', default=0.1, type=float,
                     help='sum the integers (default: find the max)')
@@ -130,24 +130,36 @@ def get_logprob():
 log_prob, grad_log_prob = get_logprob()    
 hmc = PyHMC(log_prob, grad_log_prob)
 def step(x):
-    return  hmc.hmc_step(x, Nleapfrog, step_size)[0]
+    return  hmc.hmc_step(x, Nleapfrog, step_size)
+
 
 def do_hmc(pool):
     
     samples = []
+    accepts = []
+    probs = []
     start = time.time()
     initstate = np.random.uniform(-1., 1., size=nchains*ndim).reshape([nchains, ndim])
     q = initstate
 
     for i in range(nsamples + burnin):
-        q = pool.map(step, q)
+        out = pool.map(step, q)
+        q = [i[0] for i in out] 
+        acc = [i[2] for i in out] 
+        prob = [i[3] for i in out] 
         samples.append(q)
-
+        accepts.append(acc)
+        probs.append(prob)
+        
     end = time.time()
     print(end - start)
     mysamples = np.array(samples)[burnin:]
+    accepted = np.array(accepts)[burnin:]
+    probs = np.array(probs)[burnin:]
     print(mysamples.shape)
     np.save(fpath + '/samples', mysamples)
+    np.save(fpath + '/accepted', accepted)
+    np.save(fpath + '/probs', probs)
 #
     dg.plot_hist(mysamples, fpath)
     dg.plot_trace(mysamples, fpath)

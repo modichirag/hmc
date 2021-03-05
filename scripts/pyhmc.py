@@ -24,11 +24,14 @@ class PyHMC():
 
 
     def leapfrog(self, q, p, N, step_size):
+        q0, p0 = q, p
         p = p - 0.5*step_size * self.V_g(q) 
         for i in range(N-1):
             q = q + step_size * self.KE_g(p)
-            p = p - 0.5*step_size * self.V_g(q) 
+            if np.isnan(q).sum(): return q0, p0
+            p = p - step_size * self.V_g(q) 
         q = q + step_size * self.KE_g(p)
+        if np.isnan(q).sum(): return q0, p0
         p = p - 0.5*step_size * self.V_g(q) 
         return q, p
 
@@ -39,16 +42,16 @@ class PyHMC():
         H0 = self.H(q0, p0)
         H1 = self.H(q1, p1)
         prob = min(1., np.exp(H0 - H1))
-        if np.isnan(prob): 
-            return q0, p0, 2.
+        if np.isnan(prob) or (q0-q1).sum()==0: 
+            return q0, p0, 2., [H0, H1]
         if np.random.uniform(size=1) > prob:
-            return q0, p0, 0.
-        else: return q1, p1, 1.
+            return q0, p0, 0., [H0, H1]
+        else: return q1, p1, 1., [H0, H1]
 
 
     def hmc_step(self, q, N, step_size):
         p = np.random.normal(size=q.size).reshape(q.shape)
         q1, p1 = self.leapfrog(q, p, N, step_size)
-        q, p, accepted = self.metropolis([q, p], [q1, p1])
-        return q, p, accepted
+        q, p, accepted, prob = self.metropolis([q, p], [q1, p1])
+        return q, p, accepted, prob
 

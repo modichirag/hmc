@@ -96,7 +96,7 @@ print("Time to make model : ", time.time()-start)
 #print("One chain, 1 job : ", end - start)
 #
 start = time.time()
-samples = sm_funnel.sampling(iter=2*nsamples, chains=nchains, algorithm="HMC", seed=100, n_jobs=1, init=1,
+samples = sm_funnel.sampling(iter=1*nsamples+burnin, chains=nchains, algorithm="HMC", seed=100, n_jobs=1, init=1, warmup=burnin,
                      control={"stepsize":step_size, 
                                 "adapt_t0":False,
                                 "adapt_delta":False,
