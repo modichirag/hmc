@@ -28,10 +28,10 @@ class PyHMC():
         p = p - 0.5*step_size * self.V_g(q) 
         for i in range(N-1):
             q = q + step_size * self.KE_g(p)
-            if np.isnan(q).sum(): return q0, p0
+            #if np.isnan(q).sum(): return q0, p0
             p = p - step_size * self.V_g(q) 
         q = q + step_size * self.KE_g(p)
-        if np.isnan(q).sum(): return q0, p0
+        #if np.isnan(q).sum(): return q0, p0
         p = p - 0.5*step_size * self.V_g(q) 
         return q, p
 
@@ -42,9 +42,9 @@ class PyHMC():
         H0 = self.H(q0, p0)
         H1 = self.H(q1, p1)
         prob = min(1., np.exp(H0 - H1))
-        if np.isnan(prob) or (q0-q1).sum()==0: 
+        if np.isnan(prob):# or (q0-q1).sum()==0: 
             return q0, p0, 2., [H0, H1]
-        if np.random.uniform(size=1) > prob:
+        if np.random.uniform(0., 1., size=1) > prob:
             return q0, p0, 0., [H0, H1]
         else: return q1, p1, 1., [H0, H1]
 
@@ -115,7 +115,6 @@ class PyHMC_2step():
         else:
             N2 = int(N*two_factor)
             s2 = step_size/two_factor
-            print(N2, s2)
             q2, p2 = self.leapfrog(q, p, N2, s2)
             H2 = self.H(q2, p2)
             prob2 = np.exp(H0 - H2)
@@ -127,8 +126,8 @@ class PyHMC_2step():
                 H21 = self.H(q21, p21)
                 prob21 = min(1., np.exp(H2 - H21))
                 
-                if np.isnan(prob1): prob1 = 0.
-                if np.isnan(prob21): prob21 = 0.
+                #if np.isnan(prob1): prob1 = 0.
+                #if np.isnan(prob21): prob21 = 0.
                 if prob1 == 1:
                     import sys
                     print("prob1 should not be 1")
@@ -142,3 +141,107 @@ class PyHMC_2step():
                 else:
                     return q2, p2, 2., [H0, H1, H2, H21]
                 
+
+
+
+
+
+
+class PyHMC_multistep():
+    
+    def __init__(self, log_prob, grad_log_prob, KE=None, KE_g=None):
+
+        self.log_prob, self.grad_log_prob = log_prob, grad_log_prob
+        self.V = lambda x : self.log_prob(x)*-1.
+        self.V_g = lambda x : self.grad_log_prob(x)*-1.
+        
+        if KE is None or KE_g is None:
+            self.KE = self.unit_norm_KE
+            self.KE_g = self.unit_norm_KE_g
+            
+    def unit_norm_KE(self, p):
+        return 0.5 * (p**2).sum()
+
+    def unit_norm_KE_g(self, p):
+        return p
+
+    def H(self, q,p):
+        return self.V(q) + self.KE(p)
+
+
+    def leapfrog(self, q, p, N, step_size):
+        q0, p0 = q, p
+        try:
+            p = p - 0.5*step_size * self.V_g(q) 
+            for i in range(N-1):
+                q = q + step_size * self.KE_g(p)
+                p = p - step_size * self.V_g(q) 
+            q = q + step_size * self.KE_g(p)
+            p = p - 0.5*step_size * self.V_g(q) 
+            return q, p
+        except Exception as e:
+            print(e)
+            return q0, p0
+
+
+
+
+    def get_num(self, m, q, p, N, ss, fsub): 
+
+        avec = np.zeros(m)
+        H0 = self.H(q, p)    
+        for j in range(m):
+            fac = fsub**(j)
+            qj, pj = self.leapfrog(q, p, int(N*fac), ss/fac)
+            Hj = self.H(qj, pj)
+            pfac = np.exp(H0 - Hj)
+            if  (q - qj).sum()==0: 
+                pfac = 0.
+            if j:
+                den = np.prod(1-avec[:j-1])
+                num = self.get_num(j, qj, -pj, N, ss, fsub)
+                prob = pfac*num/den
+            else: 
+                prob = pfac
+            if np.isnan(prob) or np.isinf(prob): 
+                return np.nan
+            else: avec[j] = min(1., prob)
+            if np.prod(1-avec): pass
+            else: 
+                return np.prod(1-avec)
+        return np.prod(1-avec)
+
+
+    def multi_step(self, m, q0, N, ss, fsub):
+        p0 = np.random.normal(size=q0.size).reshape(q0.shape)
+        avec = np.zeros(m)
+        H0 = self.H(q0, p0)
+        q1, p1 = self.leapfrog(q0, p0, N, ss)
+        H1 = self.H(q1, p1)
+        pfac = np.exp(H0 - H1)
+        if (q0 - q1).sum()==0: 
+            pfac = 0.
+        prob = pfac
+        if np.isnan(prob) or np.isinf(prob): 
+            prob = 0.
+        avec[0] = prob
+        acc = np.random.uniform()
+        if  acc <= avec[0]: 
+            return q1, p1, 0, avec
+        else:
+            for j in range(1, m):
+                fac = fsub**(j)
+                qj, pj = self.leapfrog(q0, p0, int(N*fac), ss/fac)
+                Hj = self.H(qj, pj)
+                pfac = np.exp(H0 - Hj)
+                if  (q0 - qj).sum()==0:
+                    pfac = 0.
+                den = np.prod(1-avec[:j-1])
+                num = self.get_num(j, qj, -pj, N, ss, fsub)
+                prob = pfac*num/den
+                if np.isnan(prob) or np.isinf(prob): prob = 0.
+                avec[j] = min(1., prob)
+                acc = np.random.uniform()
+                if acc < avec[j]: 
+                    return qj, pj, j, avec
+            return q0, p0, -1, avec
