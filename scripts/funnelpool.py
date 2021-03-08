@@ -39,7 +39,8 @@ Nleapfrog = int(Lpath / step_size)
 
 
 
-np.random.seed(100)
+#np.random.seed(100)
+#np.random.seed(0)
 def mute():
     sys.stdout = open(os.devnull, 'w')    
 
@@ -55,7 +56,7 @@ print("\nFor %d dimensions with step size %0.3f and %d steps\n"%(ndim, step_size
 fpath = './outputs/Ndim%02d/'%ndim
 try: os.makedirs(fpath)
 except Exception as e: print(e)
-fpath = fpath + 'step%03d_nleap%02d/'%(step_size*100, Nleapfrog)
+fpath = fpath + 'step%03d_nleap%02d%s/'%(step_size*100, Nleapfrog, args.suffix)
 try: os.makedirs(fpath)
 except Exception as e: print(e)
 print("output in : ", fpath)

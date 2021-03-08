@@ -39,7 +39,7 @@ Nleapfrog = int(Lpath / step_size)
 
 
 
-np.random.seed(100)
+#np.random.seed(100)
 def mute():
     sys.stdout = open(os.devnull, 'w')    
 
