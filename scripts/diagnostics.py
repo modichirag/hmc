@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
-
+import matplotlib
+matplotlib.use('Agg')
 
 def plot_hist(mysamples, fpath):
     #
