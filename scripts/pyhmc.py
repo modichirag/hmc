@@ -198,7 +198,7 @@ class PyHMC_multistep():
             if  (q - qj).sum()==0: 
                 pfac = 0.
             if j:
-                den = np.prod(1-avec[:j-1])
+                den = np.prod(1-avec[:j])
                 num = self.get_num(j, qj, -pj, N, ss, fsub)
                 prob = pfac*num/den
             else: 
@@ -236,7 +236,7 @@ class PyHMC_multistep():
                 pfac = np.exp(H0 - Hj)
                 if  (q0 - qj).sum()==0:
                     pfac = 0.
-                den = np.prod(1-avec[:j-1])
+                den = np.prod(1-avec[:j])
                 num = self.get_num(j, qj, -pj, N, ss, fsub)
                 prob = pfac*num/den
                 if np.isnan(prob) or np.isinf(prob): prob = 0.
