@@ -3,11 +3,11 @@ import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use('Agg')
 
-def plot_hist(mysamples, fpath):
+def plot_hist(mysamples, fpath, sub=10):
     #
     ns, nc, ndim = mysamples.shape
 
-    plt.hist(mysamples[..., 0].flatten(), bins='auto', alpha=0.5)
+    plt.hist(mysamples[::sub, ..., 0].flatten(), bins='auto', alpha=0.5)
     plt.grid(which='both')
     plt.savefig(fpath + '/hist_sigma.png')
     plt.close()
@@ -15,7 +15,7 @@ def plot_hist(mysamples, fpath):
     fig, ax = plt.subplots(ndim-1, 1, figsize = (5, ndim*3-3), sharex=True, sharey=True)
     if ndim == 2: ax = [ax]
     for i in range(1, ndim):
-        ax[i-1].hist(mysamples[..., i].flatten(), bins='auto', alpha=0.5)
+        ax[i-1].hist(mysamples[::sub, ..., i].flatten(), bins='auto', alpha=0.5)
         ax[i-1].grid(which='both')
         ax[i-1].set_yscale('log')
     plt.tight_layout()
