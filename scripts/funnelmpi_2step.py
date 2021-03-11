@@ -2,10 +2,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 import time
 import sys, os
-import  multiprocessing as mp
-import multiprocessing as mp
+from mpi4py import MPI
 
-from pyhmc import PyHMC_multistep
+comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
+size = comm.Get_size()
+
+
+from pyhmc import PyHMC_2step
 import diagnostics as dg
 
 import argparse
@@ -17,12 +21,10 @@ parser.add_argument('--burnin',  default=1000, type=int, help='Number of burning
 parser.add_argument('--lpath',  default=5, type=float, help='Nleapfrog*step_size')
 parser.add_argument('--step_size', default=0.1, type=float,
                     help='sum the integers (default: find the max)')
-parser.add_argument('--nsub', default=2, type=int,
-                    help='Number of adaptations for HMC')
 parser.add_argument('--two_factor', default=2, type=float,
                     help='sum the integers (default: find the max)')
-parser.add_argument('--nchains',  default=10, type=int, help='Number of chains')
-parser.add_argument('--nparallel',  default=8, type=int, help='Number of parallel iterations for map')
+parser.add_argument('--nchains',  default=1, type=int, help='Number of chains')
+parser.add_argument('--nparallel',  default=1, type=int, help='Number of parallel iterations for map')
 
 parser.add_argument('--suffix', default='', type=str,
                     help='sum the integers (default: find the max)')
@@ -30,7 +32,6 @@ parser.add_argument('--suffix', default='', type=str,
 args = parser.parse_args()
 ndim = args.ndim
 step_size = args.step_size
-nsub = args.nsub
 two_factor = args.two_factor
 nsamples = args.nsamples
 Lpath = args.lpath
@@ -58,7 +59,7 @@ print("\nFor %d dimensions with step size %0.3f and %d steps\n"%(ndim, step_size
 fpath = './outputs/Ndim%02d//'%ndim
 try: os.makedirs(fpath)
 except Exception as e: print(e)
-fpath = fpath + 'step%03d_nleap%02d_fac%02d_nsub%d/'%(step_size*100, Nleapfrog, two_factor, nsub)
+fpath = fpath + 'step%03d_nleap%02d_fac%02d/'%(step_size*100, Nleapfrog, two_factor)
 try: os.makedirs(fpath)
 except Exception as e: print(e)
 print("output in : ", fpath)
@@ -131,9 +132,9 @@ def get_logprob():
 #############################
 
 log_prob, grad_log_prob = get_logprob()    
-hmc = PyHMC_multistep(log_prob, grad_log_prob)
+hmc = PyHMC_2step(log_prob, grad_log_prob)
 def step(x):
-    return  hmc.multi_step(nsub, x, Nleapfrog, step_size, two_factor)
+    return  hmc.hmc_step(x, Nleapfrog, step_size, two_factor)
 
 
 def do_hmc(pool):
@@ -147,29 +148,51 @@ def do_hmc(pool):
 
     for i in range(nsamples + burnin):
         out = pool.map(step, q)
-        #out = list(map(step, q))
         q = [i[0] for i in out] 
-        acc = [i[2] for i in out]
+        acc = [i[2] for i in out] 
         prob = [i[3] for i in out] 
         samples.append(q)
         accepts.append(acc)
         probs.append(prob)
         
     end = time.time()
-    print(end - start)
+    print(rank, end - start)
     mysamples = np.array(samples)[burnin:]
     accepted = np.array(accepts)[burnin:]
     probs = np.array(probs)[burnin:]
-    print(mysamples.shape)
-    np.save(fpath + '/samples', mysamples)
-    np.save(fpath + '/accepted', accepted)
-    np.save(fpath + '/probs', probs)
-#
-    dg.plot_hist(mysamples, fpath)
-    dg.plot_trace(mysamples, fpath)
-    dg.plot_scatter(mysamples, fpath)
-    dg.plot_autorcc(mysamples, fpath)
-#    
+    
+    return mysamples, accepted, probs
+     
 if __name__=="__main__":
-    pool = mp.Pool(nparallel, initializer=mute)
-    do_hmc(pool)
+    mysamples, accepted, probs = do_hmc()
+    print(rank, mysamples.shape)
+    #print(rank, mysamples)
+    
+    mysamples = comm.gather(mysamples, root=0)
+    accepted = comm.gather(accepted, root=0)
+    probs = comm.gather(probs, root=0)
+
+    if rank == 0:
+        mysamples = np.concatenate(mysamples, axis=1)
+        accepted = np.concatenate(accepted, axis=1)
+        probs = np.concatenate(probs, axis=1)
+        print(mysamples.shape)
+
+        np.save(fpath + '/samples', mysamples)
+        np.save(fpath + '/accepted', accepted)
+        np.save(fpath + '/probs', probs)
+    #
+        start = time.time()
+        dg.plot_hist(mysamples, fpath)
+        print(time.time() - start)
+        start = time.time()
+        #dg.plot_trace(mysamples, fpath)
+        print(time.time() - start)
+        start = time.time()
+        dg.plot_scatter(mysamples, fpath)
+        print(time.time() - start)
+        start = time.time()
+        dg.plot_autorcc(mysamples, fpath)
+        print(time.time() - start)
+        start = time.time()
+    #   

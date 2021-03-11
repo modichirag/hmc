@@ -2,8 +2,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 import time
 import sys, os
-import  multiprocessing as mp
-import multiprocessing as mp
+from mpi4py import MPI
+
+comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
+size = comm.Get_size()
+
 
 from pyhmc import PyHMC
 import diagnostics as dg
@@ -19,8 +23,8 @@ parser.add_argument('--step_size', default=0.1, type=float,
                     help='sum the integers (default: find the max)')
 parser.add_argument('--two_factor', default=2, type=float,
                     help='sum the integers (default: find the max)')
-parser.add_argument('--nchains',  default=10, type=int, help='Number of chains')
-parser.add_argument('--nparallel',  default=8, type=int, help='Number of parallel iterations for map')
+parser.add_argument('--nchains',  default=1, type=int, help='Number of chains')
+parser.add_argument('--nparallel',  default=1, type=int, help='Number of parallel iterations for map')
 
 parser.add_argument('--suffix', default='', type=str,
                     help='sum the integers (default: find the max)')
@@ -39,10 +43,6 @@ Nleapfrog = int(Lpath / step_size)
 
 
 
-#np.random.seed(100)
-#np.random.seed(0)
-def mute():
-    sys.stdout = open(os.devnull, 'w')    
 
 
 if ndim < 2:
@@ -109,7 +109,7 @@ def get_logprob():
 
 
     start = time.time()
-    samples = sm_funnel.sampling(iter=1, chains=1, algorithm="HMC", seed=100, n_jobs=1, verbose=False,
+    samples = sm_funnel.sampling(iter=1, chains=1, algorithm="HMC",  n_jobs=1, verbose=False,
                          control={"stepsize":step_size, 
                                     "adapt_t0":False,
                                     "adapt_delta":False,
@@ -134,8 +134,10 @@ def step(x):
     return  hmc.hmc_step(x, Nleapfrog, step_size)
 
 
-def do_hmc(pool):
-    
+def do_hmc():
+
+    np.random.seed(rank*123)
+
     samples = []
     accepts = []
     probs = []
@@ -144,7 +146,8 @@ def do_hmc(pool):
     q = initstate
 
     for i in range(nsamples + burnin):
-        out = pool.map(step, q)
+        #out = map(step, q)
+        out = list(map(step, q))
         q = [i[0] for i in out] 
         acc = [i[2] for i in out] 
         prob = [i[3] for i in out] 
@@ -153,20 +156,43 @@ def do_hmc(pool):
         probs.append(prob)
         
     end = time.time()
-    print(end - start)
+    print(rank, end - start)
     mysamples = np.array(samples)[burnin:]
     accepted = np.array(accepts)[burnin:]
     probs = np.array(probs)[burnin:]
-    print(mysamples.shape)
-    np.save(fpath + '/samples', mysamples)
-    np.save(fpath + '/accepted', accepted)
-    np.save(fpath + '/probs', probs)
-#
-    dg.plot_hist(mysamples, fpath)
-    dg.plot_trace(mysamples, fpath)
-    dg.plot_scatter(mysamples, fpath)
-    dg.plot_autorcc(mysamples, fpath)
-#    
+    
+    return mysamples, accepted, probs
+     
 if __name__=="__main__":
-    pool = mp.Pool(nparallel, initializer=mute)
-    do_hmc(pool)
+    mysamples, accepted, probs = do_hmc()
+    print(rank, mysamples.shape)
+    #print(rank, mysamples)
+    
+    mysamples = comm.gather(mysamples, root=0)
+    accepted = comm.gather(accepted, root=0)
+    probs = comm.gather(probs, root=0)
+
+    if rank == 0:
+        mysamples = np.concatenate(mysamples, axis=1)
+        accepted = np.concatenate(accepted, axis=1)
+        probs = np.concatenate(probs, axis=1)
+        print(mysamples.shape)
+
+        np.save(fpath + '/samples', mysamples)
+        np.save(fpath + '/accepted', accepted)
+        np.save(fpath + '/probs', probs)
+    #
+        start = time.time()
+        dg.plot_hist(mysamples, fpath)
+        print(time.time() - start)
+        start = time.time()
+        #dg.plot_trace(mysamples, fpath)
+        print(time.time() - start)
+        start = time.time()
+        dg.plot_scatter(mysamples, fpath)
+        print(time.time() - start)
+        start = time.time()
+        dg.plot_autorcc(mysamples, fpath)
+        print(time.time() - start)
+        start = time.time()
+    #   
