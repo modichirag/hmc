@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use('Agg')
 
-def plot_hist(mysamples, fpath, sub=10):
+def plot_hist(mysamples, fpath, sub=100):
     #
     ns, nc, ndim = mysamples.shape
 
@@ -48,13 +48,13 @@ def plot_trace(mysamples, fpath):
             
 
         
-def plot_scatter(mysamples, fpath):
+def plot_scatter(mysamples, fpath, sub=100):
     #
     ns, nc, ndim = mysamples.shape
     fig, ax = plt.subplots(ndim-1, 1, figsize = (5, ndim*3-3), sharex=True, sharey=True)
     if ndim == 2: ax = [ax]
     for i in range(1, ndim):
-        ax[i-1].scatter(mysamples[..., 0], mysamples[..., i].flatten(), marker='.')
+        ax[i-1].scatter(mysamples[::sub,..., 0], mysamples[::sub,..., i].flatten(), marker='.')
         ax[i-1].grid(which='both')
     plt.tight_layout()
     plt.savefig(fpath + '/scatter.png')
@@ -84,7 +84,8 @@ def plot_autorcc(mysamples, fpath):
     rcc, tcc = get_rcc(mysamples[..., 0])
     plt.plot(rcc[:500])
     plt.grid()
-    plt.title('%d ($\pm$%d)'%(tcc.mean(), tcc.std()))   
+    try: plt.title('%d ($\pm$%d)'%(tcc.mean(), tcc.std()))   
+    except: pass
     plt.savefig(fpath + '/rcc_sigma.png')
     plt.close()
 
@@ -95,6 +96,7 @@ def plot_autorcc(mysamples, fpath):
         rcc, tcc = get_rcc(mysamples[...,i])
         ax[i-1].plot(rcc[:500])
         ax[i-1].grid()
-        ax[i-1].set_title('%d ($\pm$%d)'%(tcc.mean(), tcc.std()))
+        try: ax[i-1].set_title('%d ($\pm$%d)'%(tcc.mean(), tcc.std()))
+        except : pass
     plt.savefig(fpath + '/rcc_alpha.png')
     plt.close()
