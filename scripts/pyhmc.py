@@ -7,12 +7,19 @@ class PyHMC():
 
         self.log_prob, self.grad_log_prob = log_prob, grad_log_prob
         self.V = lambda x : self.log_prob(x)*-1.
-        self.V_g = lambda x : self.grad_log_prob(x)*-1.
-        
+        #self.V_g = lambda x : self.grad_log_prob(x)*-1.
+        self.leapcount, self.Vgcount, self.Hcount = 0, 0, 0
+
         if KE is None or KE_g is None:
             self.KE = self.unit_norm_KE
             self.KE_g = self.unit_norm_KE_g
-            
+        
+    
+    def V_g(self, x):
+        self.Vgcount += 1
+        return self.grad_log_prob(x)*-1.
+
+        
     def unit_norm_KE(self, p):
         return 0.5 * (p**2).sum()
 
@@ -20,9 +27,11 @@ class PyHMC():
         return p
 
     def H(self, q,p):
+        self.Hcount += 1
         return self.V(q) + self.KE(p)
 
     def leapfrog(self, q, p, N, step_size):
+        self.leapcount += 1 
         q0, p0 = q, p
         try:
             p = p - 0.5*step_size * self.V_g(q) 
@@ -51,10 +60,11 @@ class PyHMC():
 
 
     def hmc_step(self, q, N, step_size):
+        self.leapcount, self.Vgcount, self.Hcount = 0, 0, 0
         p = np.random.normal(size=q.size).reshape(q.shape)
         q1, p1 = self.leapfrog(q, p, N, step_size)
         q, p, accepted, prob = self.metropolis([q, p], [q1, p1])
-        return q, p, accepted, prob
+        return q, p, accepted, prob, [self.Hcount, self.Vgcount, self.leapcount]
 
 ##
 
@@ -155,23 +165,31 @@ class PyHMC_multistep():
 
         self.log_prob, self.grad_log_prob = log_prob, grad_log_prob
         self.V = lambda x : self.log_prob(x)*-1.
-        self.V_g = lambda x : self.grad_log_prob(x)*-1.
-        
+        #self.V_g = lambda x : self.grad_log_prob(x)*-1.
+        self.leapcount, self.Vgcount, self.Hcount = 0, 0, 0
+
         if KE is None or KE_g is None:
             self.KE = self.unit_norm_KE
             self.KE_g = self.unit_norm_KE_g
-            
+        
+    
+    def V_g(self, x):
+        self.Vgcount += 1
+        return self.grad_log_prob(x)*-1.
+    
     def unit_norm_KE(self, p):
         return 0.5 * (p**2).sum()
 
     def unit_norm_KE_g(self, p):
         return p
 
-    def H(self, q,p):
+    def H(self, q, p):
+        self.Hcount +=1
         return self.V(q) + self.KE(p)
 
 
     def leapfrog(self, q, p, N, step_size):
+        self.leapcount += 1
         q0, p0 = q, p
         try:
             p = p - 0.5*step_size * self.V_g(q) 
@@ -182,10 +200,8 @@ class PyHMC_multistep():
             p = p - 0.5*step_size * self.V_g(q) 
             return q, p
         except Exception as e:
-            print(e)
+            #print(e)
             return q0, p0
-
-
 
 
     def get_num(self, m, q, p, N, ss, fsub): 
@@ -206,7 +222,7 @@ class PyHMC_multistep():
             else: 
                 prob = pfac
             if np.isnan(prob) or np.isinf(prob): 
-                return np.nan
+                return 0. #np.nan
             else: avec[j] = min(1., prob)
             if np.prod(1-avec): pass
             else: 
@@ -215,21 +231,23 @@ class PyHMC_multistep():
 
 
     def multi_step(self, m, q0, N, ss, fsub):
+
+        
+        self.leapcount, self.Vgcount, self.Hcount = 0, 0, 0
         p0 = np.random.normal(size=q0.size).reshape(q0.shape)
         avec = np.zeros(m)
         H0 = self.H(q0, p0)
         q1, p1 = self.leapfrog(q0, p0, N, ss)
         H1 = self.H(q1, p1)
         pfac = np.exp(H0 - H1)
-        if (q0 - q1).sum()==0: 
-            pfac = 0.
         prob = pfac
-        if np.isnan(prob) or np.isinf(prob): 
+        if np.isnan(prob) or np.isinf(prob) or (q0 - q1).sum()==0: 
             prob = 0.
+        prob = min(1., prob)
         avec[0] = prob
         acc = np.random.uniform()
         if  acc <= avec[0]: 
-            return q1, p1, 0, avec
+            return q1, p1, 0, avec, [self.Hcount, self.Vgcount, self.leapcount]
         else:
             for j in range(1, m):
                 fac = fsub**(j)
@@ -245,5 +263,7 @@ class PyHMC_multistep():
                 avec[j] = min(1., prob)
                 acc = np.random.uniform()
                 if acc < avec[j]: 
-                    return qj, pj, j, avec
-            return q0, p0, -1, avec
+                    return qj, pj, j, avec, [self.Hcount, self.Vgcount, self.leapcount]
+            return q0, p0, -1, avec, [self.Hcount, self.Vgcount, self.leapcount]
+
+
