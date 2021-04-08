@@ -183,7 +183,20 @@ def do_hmc():
     accepted = np.array(accepts)[burnin:]
     probs = np.array(probs)[burnin:]
     counts = np.array(counts)[burnin:]
-    
+
+    try: os.makedirs(fpath +'/samples/')
+    except: pass
+    try: os.makedirs(fpath +'/probs/')
+    except: pass
+    try: os.makedirs(fpath +'/accepts/')
+    except: pass
+    try: os.makedirs(fpath +'/counts/')
+    except: pass
+    np.save(fpath + '/samples/%02d'%rank, mysamples)
+    np.save(fpath + '/probs/%02d'%rank, probs)
+    np.save(fpath + '/accepts/%02d'%rank, accepted)
+    np.save(fpath + '/counts/%02d'%rank, counts)
+
     return mysamples, accepted, probs, counts
      
 if __name__=="__main__":
@@ -191,11 +204,15 @@ if __name__=="__main__":
     print(rank, mysamples.shape)
     #print(rank, mysamples)
     
-    mysamples = comm.gather(mysamples, root=0)
-    accepted = comm.gather(accepted, root=0)
-    probs = comm.gather(probs, root=0)
-    counts = comm.gather(counts, root=0)
-
+    try:
+        mysamples = comm.gather(mysamples, root=0)
+        accepted = comm.gather(accepted, root=0)
+        probs = comm.gather(probs, root=0)
+        counts = comm.gather(counts, root=0)
+    except Exception as e:
+        print(rank, e)
+        comm.Abort(1)    #    sys.exit(-1)
+    
     if rank == 0:
         mysamples = np.concatenate(mysamples, axis=1)
         accepted = np.concatenate(accepted, axis=1)

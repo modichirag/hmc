@@ -137,7 +137,7 @@ def step(x):
     return  hmc.hmc_step(x, Nleapfrog, step_size, two_factor)
 
 
-def do_hmc(pool):
+def do_hmc():
     
     samples = []
     accepts = []
@@ -147,7 +147,7 @@ def do_hmc(pool):
     q = initstate
 
     for i in range(nsamples + burnin):
-        out = pool.map(step, q)
+        out = list(map(step, q))
         q = [i[0] for i in out] 
         acc = [i[2] for i in out] 
         prob = [i[3] for i in out] 
