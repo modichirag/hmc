@@ -74,24 +74,53 @@ class AdHMC():
         else: return q1, p1, 1., [H0, H1]
 
 
-    def hmc_step(self, q0, N, smin=0.01, smax=1.0):
+
+    def get_stepsize(self, q0, p0, smin=0.01, smax=1.0, ntry=10, logspace=True, nsteps=3, eps=None):
+        H0 = self.H(q0, p0)
+        Hs = np.zeros(ntry)
+        if logspace: steps = np.logspace(np.log10(smin), np.log10(smax), ntry)
+        else:  steps = np.linspace(smin, smax, ntry)
+
+        for iss, ss in enumerate(steps):
+            #nsteps = int(steps.max()/ss)+1
+            q1, p1 = self.leapfrog(q0, p0, nsteps, ss)
+            Hs[iss] = self.H(q1, p1)
+        pp = np.exp(H0 - Hs)
+        pp[np.isnan(pp)] = 0 
+        pp[np.isinf(pp)] = 0 
+        pp /= pp.sum()
+        cdf = np.cumsum(pp)
+        if eps is None:
+            sx = np.random.uniform(low=cdf.min()) 
+            isx = np.where(sx > cdf)[0][-1]
+            sx2 = np.random.uniform(steps[isx], steps[isx+1])
+            prob = pp[isx+1]
+            return sx2, pp[isx+1]
+        else: 
+            prob = pp[np.where(steps > eps)[0][0]]
+            return prob
+
+    def hmc_step(self, q0, N, smin=0.01, smax=1.0, ratios= [0.75, 1.0, 1/0.75]):
         
         self.leapcount, self.Vgcount, self.Hcount = 0, 0, 0
         p0 = np.random.normal(size=q0.size).reshape(q0.shape) * self.metricstd
         eps, pf_den, pb_num = np.zeros(N), np.zeros(N), np.zeros(N)
-        ratios = [0.5, 1.0, 2.0]
-        pwts = np.array([0.5, 1.0, 2.0])
+        pwts0 = 1. #np.array([0.9, 1.0,  1.1])
         nr = len(ratios)
         H0 = self.H(q0, p0)
 
-        #First step is random
-        ss = np.random.uniform(smin, smax)
+        #First step is drawn from a distribution
+        ss, pf_den[0] = self.get_stepsize(q0, p0, smin, smax)
+        #ss = np.exp(np.random.uniform(np.log(smin), np.log(smax)))
+        #pf_den[0] = 1/(smax-smin)/ss
+        #ss = np.random.uniform(smin, smax)
+        #pf_den[0] = 1/(smax-smin)
         eps[0] = ss
-        pf_den[0] = 1/(smax-smin)
         q1, p1, _ = self.leapfrog1(q0, p0, ss)
         H1 = self.H(q1, p1)
         Hprev = H0
-        
+    
+        #for i in range(N-1):
         for i in range(N-1):
             #q1, p1, H1 is the current position.
             #ss is the current step size i.e. the last taken
@@ -101,55 +130,99 @@ class AdHMC():
             qs, ps, Hs = [], [], []
             Vgq = None
             for j in range(nr):
-                q, p, Vgq = self.leapfrog1(q1, p1, ss*ratios[j], Vgq)
+                ss2 = ss*ratios[j]
+                q, p, Vgq = self.leapfrog1(q1, p1, ss2, Vgq)
                 qs.append(q)
                 ps.append(p)
                 Hs.append(self.H(q, p))
-                pf[j] = np.exp(H1 - Hs[-1])
+                pH = np.exp(H1 - Hs[-1])
+                if np.isnan(pH) or np.isinf(pH): pH = 0
+                pf[j] = pH
+            pwts = np.ones(nr) * pwts0
+            if smin > ss*ratios[0]: pwts[0] = 0
+            if smax < ss*ratios[-1]: pwts[-1] = 0
             pf *= pwts
             pf /= pf.sum()
-            pfc = np.cumsum(pf)
-            pind = np.where(np.cumsum(pfc) > np.random.uniform())[0][0]
+            if np.isnan(pf.sum()) or np.isinf(pf.sum()): 
+                return q0, p0, 100+i, 0, np.stack([pf_den, pb_num, eps])
+            pind = np.random.choice(nr, p=pf)
             q2, p2, H2 = qs[pind], ps[pind], Hs[pind]
             pf_den[i+1] = pf[pind]
-            eps[i+1] = ratios[pind]
             ssnew = ss*ratios[pind]
+            eps[i+1] =ssnew # ratios[pind]
 
             #step from q1, p1 if we arrive here with ssnew step size in reverse direction
             Hsb = []
             for j in range(nr):
-                if ssnew*ratios[j] == ss:
+                if np.allclose(ssnew*ratios[j] , ss):
                     Hsb.append(Hprev)
                     pbind = j
                 else:
-                    q, p, Vgq = self.leapfrog1(q1, -p1, ssnew*ratios[j], Vgq)
+                    ss2 = ssnew*ratios[j]
+                    q, p, Vgq = self.leapfrog1(q1, -p1, ss2, Vgq)
                     Hsb.append(self.H(q, p))
-                pb[j] = np.exp(H1 - Hsb[-1])
+                pH =  np.exp(H1 - Hsb[-1])
+                if np.isnan(pH) or np.isinf(pH): pH = 0
+                pb[j] = pH
+            pwts = np.ones(nr) *pwts0
+            if smin > ssnew*ratios[0]: pwts[0] = 0
+            if smax < ssnew*ratios[-1]: pwts[-1] = 0
             pb *= pwts
             pb /= pb.sum()
             pb_num[i] = pb[pbind]
 
+            #setup for next step
             ss = ssnew
             Hprev = H1
             q1, p1, H1 = q2, p2, H2
-            #print(pf, pb)
-            #print(ss, ssnew)
+            #print(pf, pb, pf[pind], pb[pbind])
+            #print(ss)
+
         if (ssnew > smin) and (ssnew < smax):
-            pb_num[-1] = 1/(smax - smin)
-        
+            #pb_num[-1] = 1/(smax-smin)
+            #pb_num[-1] = 1/(smax - smin)/ssnew
+            pb_num[-1] = self.get_stepsize(q2, -p2, smin=smin, smax=smax, eps=ssnew)
+
         adfac = np.prod(pb_num)/np.prod(pf_den)
-        #print(pf_den)
-        #print(pb_num)
-        #print(eps, adfac)
         prob = np.exp(H0 - H2) * adfac
+        print("prb, fac, metrop : ", prob, adfac, prob/adfac, pb_num[-1], pf_den[0])
         if np.isnan(prob) or np.isinf(prob) or (q0-q1).sum()==0: 
-            return q0, p0, 2., [H0, H1]
+            return q0, p0, 2., prob, np.stack([pf_den, pb_num, eps])
         elif np.random.uniform(0., 1., size=1) > min(1., prob):
-            return q0, p0, 0., [H0, H1]
-        else: return q2, p2, 1., [H0, H1]
-
-        #q, p, accepted, prob = self.metropolis([q, p], [q2, p2])
-        #return q, p, accepted, prob, [self.Hcount, self.Vgcount, self.leapcount]
-
+            return q0, p0, 0., prob, np.stack([pf_den, pb_num, eps])
+        else: return q2, p2, 1., prob, np.stack([pf_den, pb_num, eps])
+ 
 ##
+
+
+
+
+
+    def hmc_step_vanilla(self, q0, N, smin=0.01, smax=1.0):
+        
+        self.leapcount, self.Vgcount, self.Hcount = 0, 0, 0
+        p0 = np.random.normal(size=q0.size).reshape(q0.shape) * self.metricstd
+        H0 = self.H(q0, p0)
+
+        #First step is drawn from a distribution
+        ss, pf_den = self.get_stepsize(q0, p0, smin, smax)
+        eps = ss
+        q1, p1 = self.leapfrog(q0, p0, N, ss)
+        H1 = self.H(q1, p1)        
+        pb_num = self.get_stepsize(q1, -p1, smin=smin, smax=smax, eps=ss)
+
+        adfac = pb_num/pf_den
+        prob = np.exp(H0 - H1) * adfac
+        print("prb, fac, metrop : ", prob, adfac, prob/adfac, pb_num, pf_den)
+        if np.isnan(prob) or np.isinf(prob) or (q0-q1).sum()==0: 
+            return q0, p0, 2., prob, np.stack([pf_den, pb_num, eps])
+        elif np.random.uniform(0., 1., size=1) > min(1., prob):
+            return q0, p0, 0., prob, np.stack([pf_den, pb_num, eps])
+        else: return q1, p1, 1., prob, np.stack([pf_den, pb_num, eps])
+ 
+##
+
+
+
+
 
