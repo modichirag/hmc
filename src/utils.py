@@ -4,6 +4,58 @@ import sys
 import time
 
 
+
+def get_ess_true(x, mean, std):
+    '''Returns ess for samples x by comapring with xref for summaries
+    
+    Parameters
+    ----------
+    x: array of samples of shape (Nsamples, Nchains, Nparams)
+    mean: array of true mean of shape (Nparams)
+    std: array of true std of shape (Nparams)
+
+    Returns
+    -------
+    Tuple of arrays (ess, esschain)-
+    ess: array of shape Nparams
+    esschain: array of shape (Nchains, Nparams)
+    '''
+    err = x.mean(axis=0) - mean
+    rms = (err**2).mean(axis=0)**0.5
+    ess = (std/rms)**2
+    esschain = (std/err)**2
+    return ess*x.shape[1], esschain*x.shape[1]
+
+
+def get_ess_ref(x, xref):
+    '''Returns ess for samples x by comapring with xref for summaries
+    
+    Parameters
+    ----------
+    x: array of samples of shape (Nsamples, Nchains, Nparams)
+    xref: array of reference samples of shape (Nsamples, Nparams)
+
+    Returns
+    -------
+    Tuple of arrays (ess, ess2, err, err2)-
+    ess: array of shape Nparams, ess estimated with mean (x)
+    ess2: array of shape Nparams, ess estimated with std (x**2)
+    err: array of shape (Nchain, Nparams), error in mean
+    err2: array of shape (Nchain, Nparams), error in std
+    '''
+    err = x.mean(axis=0) - xref.mean(axis=0)
+    rms = (err**2).mean(axis=0)**0.5
+    ess = (xref.std(axis=0)/rms)**2
+    esschain = (xref.std(axis=0)/err)**2
+    x2, xref2 = x**2, xref**2
+    err2 = x2.mean(axis=0) - xref2.mean(axis=0)
+    rms2 = (err2**2).mean(axis=0)**0.5
+    ess2 = (xref2.std(axis=0)/rms2)**2
+    esschain2 = (xref2.std(axis=0)/err2)**2
+    return ess*x.shape[1], ess2*x.shape[1], err, err2
+
+
+
 def get_rcc(x, c=5, threshold=0.2):
     tmp = x.copy()
     tmp = (tmp - tmp.mean(axis=0))
@@ -17,6 +69,8 @@ def get_rcc(x, c=5, threshold=0.2):
     tc = np.array([taus[window[ii, jj], ii, jj] for ii in range(window.shape[0]) for jj in range(window.shape[1])])
     tc = tc.reshape(window.shape).astype(int) #+1 #because int rounds down
     return rcc, tc
+
+
 
 def clean_samples(xx, maxv=None, fidsub=1):
 
@@ -61,6 +115,37 @@ def get_cdf(x, xref=None, quantiles=None, nbins=20, qs=None, xmin=None, xmax=Non
         countsrank.append(counts)
         cdfranks.append(np.cumsum(counts)/sum(counts))
     return np.array(cdfranks), np.array(countsrank)
+
+
+def get_ks(x, xref):
+    print('shape in ks : ', x.shape, xref.shape)
+    #Get KS statistics for the total samples and the tails
+    mu, std = xref.mean(axis=0), xref.std(axis=0)
+    #print("means and std from reference : ", mu, std)
+    stats, pvals = [],[]
+    for i in range(x.shape[1]):
+        ss, pp = [], []
+        ks = ks_2samp(x[:, i], xref[:, i])
+        ss.append(ks.statistic)
+        pp.append(ks.pvalue)
+        for j in [-2, -1, 1, 2]:
+            tt = mu[i] + j*std[i]
+            a, b = x[:, i].copy(), xref[:, i].copy()
+
+            if j < 0: 
+                a, b = a[a<tt], b[b<tt]
+            else: 
+                a, b = a[a>tt], b[b>tt] 
+            try: 
+                ks = ks_2samp(a, b)
+                ss.append(ks.statistic)
+                pp.append(ks.pvalue)
+            except: 
+                ss.append(0)
+                pp.append(1e-99)
+        stats.append(ss)
+        pvals.append(pp)
+    return stats, pvals
 
 
 #def get_cdf(x, xref, nbins=20):
