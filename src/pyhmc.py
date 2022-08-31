@@ -1,5 +1,7 @@
 import numpy as np
 
+
+
 class HMC():
 
     def __init__(self, log_prob, grad_log_prob, invmetric_diag=None):
@@ -45,26 +47,6 @@ class HMC():
             print("exception : ", e)
             return q0, p0
 
-
-    def leapfrog_Vq(self, q, p, N, step_size, V_q=None):
-        self.leapcount += 1 
-        q0, p0, V_q0 = q, p, V_q
-        try:
-            if V_q is None:
-                p = p - 0.5*step_size * self.V_g(q) 
-            else:
-                p = p - 0.5*step_size * V_q
-            for i in range(N-1):
-                q = q + step_size * self.KE_g(p)
-                p = p - step_size * self.V_g(q) 
-            q = q + step_size * self.KE_g(p)
-            V_q1 = self.V_g(q) 
-            p = p - 0.5*step_size * V_q1
-            return q, p, V_q1
-        except Exception as e:
-            print("exception : ", e)
-            return q0, p0, V_q0
-
     def metropolis(self, qp0, qp1):
         q0, p0 = qp0
         q1, p1 = qp1
@@ -88,21 +70,112 @@ class HMC():
 
 
 
-#####
 class PyHMC(HMC):
     
     def __init__(self, log_prob, grad_log_prob, invmetric_diag=None):
-        super(PyHMC, self).__init__(log_prob, grad_log_prob, invmetric_diag=invmetric_diag)        
+        super(PyHMC, self).__init__(log_prob, grad_log_prob, invmetric_diag=None)
+        
+        self.log_prob, self.grad_log_prob = log_prob, grad_log_prob
+        self.V = lambda x : self.log_prob(x)*-1.
+        #self.V_g = lambda x : self.grad_log_prob(x)*-1.
+        self.leapcount, self.Vgcount, self.Hcount = 0, 0, 0
+
+        if invmetric_diag is None: self.invmetric_diag = 1.
+        else: self.invmetric_diag = invmetric_diag
+        self.metricstd = self.invmetric_diag**-0.5
+
+        self.KE = lambda p: 0.5*(p**2 * self.invmetric_diag).sum()
+        self.KE_g = lambda p: p * self.invmetric_diag
+    
+    def V_g(self, x):
+        self.Vgcount += 1
+        return self.grad_log_prob(x)*-1.
+        
+    def unit_norm_KE(self, p):
+        return 0.5 * (p**2).sum()
+
+    def unit_norm_KE_g(self, p):
+        return p
+
+    def H(self, q,p):
+        self.Hcount += 1
+        return self.V(q) + self.KE(p)
+
+    def leapfrog(self, q, p, N, step_size):
+        self.leapcount += 1 
+        q0, p0 = q, p
+        try:
+            p = p - 0.5*step_size * self.V_g(q) 
+            for i in range(N-1):
+                q = q + step_size * self.KE_g(p)
+                p = p - step_size * self.V_g(q) 
+            q = q + step_size * self.KE_g(p)
+            p = p - 0.5*step_size * self.V_g(q) 
+            return q, p
+        except Exception as e:
+            print("exception : ", e)
+            return q0, p0
+
+    def metropolis(self, qp0, qp1):
+        q0, p0 = qp0
+        q1, p1 = qp1
+        H0 = self.H(q0, p0)
+        H1 = self.H(q1, p1)
+        prob = np.exp(H0 - H1)
+        #prob = min(1., np.exp(H0 - H1))
+        if np.isnan(prob) or np.isinf(prob) or (q0-q1).sum()==0: 
+            return q0, p0, 2., [H0, H1]
+        elif np.random.uniform(0., 1., size=1) > min(1., prob):
+            return q0, p0, 0., [H0, H1]
+        else: return q1, p1, 1., [H0, H1]
+
 
     def hmc_step(self, q, N, step_size):
-        return self.step(q, N, step_size)
+        self.leapcount, self.Vgcount, self.Hcount = 0, 0, 0
+        p = np.random.normal(size=q.size).reshape(q.shape) * self.metricstd
+        q1, p1 = self.leapfrog(q, p, N, step_size)
+        q, p, accepted, prob = self.metropolis([q, p], [q1, p1])
+        return q, p, accepted, prob, [self.Hcount, self.Vgcount, self.leapcount]
+##
 
 
-#####
-class PyHMC_2step(HMC):
+class PyHMC_2step():
     
     def __init__(self, log_prob, grad_log_prob, KE=None, KE_g=None):
-        super(PyHMC_2step, self).__init__(log_prob, grad_log_prob, invmetric_diag=None)        
+
+        self.log_prob, self.grad_log_prob = log_prob, grad_log_prob
+        self.V = lambda x : self.log_prob(x)*-1.
+        self.V_g = lambda x : self.grad_log_prob(x)*-1.
+        
+        if KE is None or KE_g is None:
+            self.KE = self.unit_norm_KE
+            self.KE_g = self.unit_norm_KE_g
+        else: self.KE, self.KE_g = KE, KE_g
+            
+    def unit_norm_KE(self, p):
+        return 0.5 * (p**2).sum()
+
+    def unit_norm_KE_g(self, p):
+        return p
+
+    def H(self, q,p):
+        return self.V(q) + self.KE(p)
+
+
+    def leapfrog(self, q, p, N, step_size):
+        q0, p0 = q, p
+        try:
+            p = p - 0.5*step_size * self.V_g(q) 
+            for i in range(N-1):
+                q = q + step_size * self.KE_g(p)
+                p = p - step_size * self.V_g(q) 
+            q = q + step_size * self.KE_g(p)
+            p = p - 0.5*step_size * self.V_g(q) 
+            return q, p
+        except Exception as e:
+            print(e)
+            return q0, p0
+
 
 
     def hmc_step(self, q, N, step_size, two_factor):
@@ -152,13 +225,59 @@ class PyHMC_2step(HMC):
                     return q2, p2, 2., [H0, H1, H2, H21]
                 
 
-#####
-class PyHMC_multistep_tries(HMC):
+
+
+
+
+
+class PyHMC_multistep_tries():
     '''Probabilistic DRHMC with p_try = 1 - \pi(prop)/\pi(init)
     i.e. without the balancing Hastings factor of delayed attempts
     '''    
     def __init__(self, log_prob, grad_log_prob, invmetric_diag=None):
-        super(PyHMC_multistep_tries, self).__init__(log_prob, grad_log_prob, invmetric_diag=invmetric_diag) 
+
+        self.log_prob, self.grad_log_prob = log_prob, grad_log_prob
+        self.V = lambda x : self.log_prob(x)*-1.
+        #self.V_g = lambda x : self.grad_log_prob(x)*-1.
+        self.leapcount, self.Vgcount, self.Hcount = 0, 0, 0
+
+        if invmetric_diag is None: self.invmetric_diag = 1.
+        else: self.invmetric_diag = invmetric_diag
+        self.metricstd = self.invmetric_diag**-0.5
+
+        self.KE = lambda p: 0.5*(p**2 * self.invmetric_diag).sum()
+        self.KE_g = lambda p: p * self.invmetric_diag
+ 
+    
+    def V_g(self, x):
+        self.Vgcount += 1
+        return self.grad_log_prob(x)*-1.
+    
+    def unit_norm_KE(self, p):
+        return 0.5 * (p**2).sum()
+
+    def unit_norm_KE_g(self, p):
+        return p
+
+    def H(self, q, p):
+        self.Hcount +=1
+        return self.V(q) + self.KE(p)
+
+
+    def leapfrog(self, q, p, N, step_size):
+        self.leapcount += 1
+        q0, p0 = q, p
+        try:
+            p = p - 0.5*step_size * self.V_g(q) 
+            for i in range(N-1):
+                q = q + step_size * self.KE_g(p)
+                p = p - step_size * self.V_g(q) 
+            q = q + step_size * self.KE_g(p)
+            p = p - 0.5*step_size * self.V_g(q) 
+            return q, p
+        except Exception as e:
+            #print(e)
+            return q0, p0
 
 
     def get_num(self, m, q, p, N, ss, fsub): 
@@ -238,14 +357,54 @@ class PyHMC_multistep_tries(HMC):
 
 
 
-
-#####
-class PyHMC_multistep_tries3(HMC):
+class PyHMC_multistep_tries3():
     '''Probabilistic DRHMC with p_try = 1 - \alpha
     where \alpha was the acceptance probility of the last stage
     '''
     def __init__(self, log_prob, grad_log_prob, invmetric_diag=None):
-        super(PyHMC_multistep_tries3, self).__init__(log_prob, grad_log_prob, invmetric_diag=invmetric_diag) 
+
+        self.log_prob, self.grad_log_prob = log_prob, grad_log_prob
+        self.V = lambda x : self.log_prob(x)*-1.
+        #self.V_g = lambda x : self.grad_log_prob(x)*-1.
+        self.leapcount, self.Vgcount, self.Hcount = 0, 0, 0
+
+        if invmetric_diag is None: self.invmetric_diag = 1.
+        else: self.invmetric_diag = invmetric_diag
+        self.metricstd = self.invmetric_diag**-0.5
+
+        self.KE = lambda p: 0.5*(p**2 * self.invmetric_diag).sum()
+        self.KE_g = lambda p: p * self.invmetric_diag
+ 
+    
+    def V_g(self, x):
+        self.Vgcount += 1
+        return self.grad_log_prob(x)*-1.
+    
+    def unit_norm_KE(self, p):
+        return 0.5 * (p**2).sum()
+
+    def unit_norm_KE_g(self, p):
+        return p
+
+    def H(self, q, p):
+        self.Hcount +=1
+        return self.V(q) + self.KE(p)
+
+
+    def leapfrog(self, q, p, N, step_size):
+        self.leapcount += 1
+        q0, p0 = q, p
+        try:
+            p = p - 0.5*step_size * self.V_g(q) 
+            for i in range(N-1):
+                q = q + step_size * self.KE_g(p)
+                p = p - step_size * self.V_g(q) 
+            q = q + step_size * self.KE_g(p)
+            p = p - 0.5*step_size * self.V_g(q) 
+            return q, p
+        except Exception as e:
+            #print(e)
+            return q0, p0
 
 
     def get_num(self, m, q, p, N, ss, fsub): 
@@ -324,12 +483,56 @@ class PyHMC_multistep_tries3(HMC):
             return q0, p0, -1, avec, [self.Hcount, self.Vgcount, self.leapcount], ptries
 
 
-#####
+
+
+
 class PyHMC_multistep():
     '''vanilla DRHMC code
     '''
     def __init__(self, log_prob, grad_log_prob, invmetric_diag=None):
-        super(PyHMC_multistep, self).__init__(log_prob, grad_log_prob, invmetric_diag=invmetric_diag) 
+
+        self.log_prob, self.grad_log_prob = log_prob, grad_log_prob
+        self.V = lambda x : self.log_prob(x)*-1.
+        #self.V_g = lambda x : self.grad_log_prob(x)*-1.
+        self.leapcount, self.Vgcount, self.Hcount = 0, 0, 0
+
+        if invmetric_diag is None: self.invmetric_diag = 1.
+        else: self.invmetric_diag = invmetric_diag
+        self.metricstd = self.invmetric_diag**-0.5
+
+        self.KE = lambda p: 0.5*(p**2 * self.invmetric_diag).sum()
+        self.KE_g = lambda p: p * self.invmetric_diag
+ 
+    
+    def V_g(self, x):
+        self.Vgcount += 1
+        return self.grad_log_prob(x)*-1.
+    
+    def unit_norm_KE(self, p):
+        return 0.5 * (p**2).sum()
+
+    def unit_norm_KE_g(self, p):
+        return p
+
+    def H(self, q, p):
+        self.Hcount +=1
+        return self.V(q) + self.KE(p)
+
+
+    def leapfrog(self, q, p, N, step_size):
+        self.leapcount += 1
+        q0, p0 = q, p
+        try:
+            p = p - 0.5*step_size * self.V_g(q) 
+            for i in range(N-1):
+                q = q + step_size * self.KE_g(p)
+                p = p - step_size * self.V_g(q) 
+            q = q + step_size * self.KE_g(p)
+            p = p - 0.5*step_size * self.V_g(q) 
+            return q, p
+        except Exception as e:
+            #print(e)
+            return q0, p0
 
 
     def get_num(self, m, q, p, N, ss, fsub): 
@@ -398,229 +601,87 @@ class PyHMC_multistep():
 
 
 
-#####
-class GHMC(HMC):
+class PyHMC_batch():
     
-    def __init__(self, log_prob, grad_log_prob, alpha, invmetric_diag=None):
-        super(GHMC, self).__init__(log_prob, grad_log_prob, invmetric_diag=invmetric_diag)        
-        self.alpha = alpha
+    def __init__(self, log_prob, grad_log_prob, invmetric_diag=None):
 
+        self.log_prob, self.grad_log_prob = log_prob, grad_log_prob
+        self.V = lambda x : self.log_prob(x)*-1.
+        #self.V_g = lambda x : self.grad_log_prob(x)*-1.
+        self.leapcount, self.Vgcount, self.Hcount = 0, 0, 0
+
+        if invmetric_diag is None: self.invmetric_diag = 1.
+        else: self.invmetric_diag = invmetric_diag
+        self.metricstd = self.invmetric_diag**-0.5
+
+        self.KE = lambda p: np.sum(0.5*(p**2 * self.invmetric_diag), axis=tuple([i for i in range(1, len(p.shape))]))
+        self.KE_g = lambda p: p * self.invmetric_diag
+    
+    def V_g(self, x):
+        self.Vgcount += 1
+        return self.grad_log_prob(x)*-1.
+        
+    def unit_norm_KE(self, p):
+        return 0.5 * np.sum(p**2, axis=tuple([i for i in range(1, len(p.shape))]))
+
+    def unit_norm_KE_g(self, p):
+        return p
+
+    def H(self, q,p):
+        self.Hcount += 1
+        return self.V(q) + self.KE(p)
+
+    def leapfrog(self, q, p, N, step_size):
+        self.leapcount += 1 
+        q0, p0 = q, p
+        try:
+            p = p - 0.5*step_size * self.V_g(q) 
+            for i in range(N-1):
+                q = q + step_size * self.KE_g(p)
+                p = p - step_size * self.V_g(q) 
+            q = q + step_size * self.KE_g(p)
+            p = p - 0.5*step_size * self.V_g(q) 
+            return q, p
+        except Exception as e:
+            print(e)
+            return q0, p0
 
     def metropolis(self, qp0, qp1):
         q0, p0 = qp0
         q1, p1 = qp1
         H0 = self.H(q0, p0)
         H1 = self.H(q1, p1)
-        prob = np.exp(H0 - H1)
+        probs = np.exp(H0 - H1)
+        print(probs)
         #prob = min(1., np.exp(H0 - H1))
-        if np.isnan(prob) or np.isinf(prob) or (q0-q1).sum()==0: 
-            return q0, p0, 2., [H0, H1]
-        elif np.random.uniform(0., 1., size=1) > min(1., prob):
-            return q0, -p0, 0., [H0, H1] # Momentum is flipped upon rejection
-        else: return q1, p1, 1., [H0, H1]
+        q2, p2 = [],[]
+        acc = []
+        for i, prob in enumerate(probs):
+            if np.isnan(prob) or np.isinf(prob) or (q0-q1).sum()==0: 
+                q2.append(q0[i])
+                p2.append(p0[i])
+                acc.append(-1)
+            elif np.random.uniform(0., 1., size=1) > min(1., prob):
+                q2.append(q0[i])
+                p2.append(p0[i])
+                acc.append(0)
+            else: 
+                q2.append(q1[i])
+                p2.append(p1[i])
+                acc.append(1)
+        return np.stack(q2, axis=0), \
+            np.stack(p2, axis=0), \
+            np.array(acc), [H0, H1]
+        #else: return q1, p1, 1., [H0, H1]
 
 
-    def step(self, q, p, N, step_size, V_q=None):
+    def hmc_step(self, q, N, step_size):
         self.leapcount, self.Vgcount, self.Hcount = 0, 0, 0
-        #pmu = p*np.sqrt(1 - self.alpha**2)
-        #p = np.random.normal(pmu, self.alpha) * self.metricstd
-        pn = np.random.normal(size=q.size).reshape(q.shape) * self.metricstd
-        p = self.alpha*p + np.sqrt(1 - self.alpha**2)*pn
-        q1, p1, V_q1 = self.leapfrog_Vq(q, p, N, step_size, V_q)
+        p = np.random.normal(size=q.size).reshape(q.shape) * self.metricstd
+        q1, p1 = self.leapfrog(q, p, N, step_size)
+        print(q1.shape, p1.shape)
         q, p, accepted, prob = self.metropolis([q, p], [q1, p1])
-        if accepted == 1: V_q = V_q1
-        return q, p, V_q, accepted, prob, [self.Hcount, self.Vgcount, self.leapcount]
+        return q, p, accepted, prob, [self.Hcount, self.Vgcount, self.leapcount]
 
+##
 
-#####
-class Persistent_GHMC(HMC):
-    
-    def __init__(self, log_prob, grad_log_prob, alpha, delta, invmetric_diag=None):
-        super(Persistent_GHMC, self).__init__(log_prob, grad_log_prob, invmetric_diag=invmetric_diag)       
-
-        self.alpha = alpha
-        self.delta = delta
-
-
-    def metropolis(self, qp0, qp1, u):
-        q0, p0 = qp0
-        q1, p1 = qp1
-        H0 = self.H(q0, p0)
-        H1 = self.H(q1, p1)
-        prob = np.exp(H0 - H1)
-        if np.isnan(prob) or np.isinf(prob) or (q0-q1).sum()==0: 
-            return q0, p0, 2., [H0, H1]
-        elif abs(u)  > min(1., prob):
-            return q0, -p0, 0., [H0, H1], u # Momentum is flipped upon rejection
-        else: return q1, p1, 1., [H0, H1], u/prob
-
-
-    def step(self, q, p, u, N, step_size, V_q=None):
-        self.leapcount, self.Vgcount, self.Hcount = 0, 0, 0
-        #pmu = p*np.sqrt(1 - self.alpha**2)
-        #p = np.random.normal(pmu, self.alpha) * self.metricstd
-        pn = np.random.normal(size=q.size).reshape(q.shape) * self.metricstd
-        p = self.alpha*p + np.sqrt(1 - self.alpha**2)*pn
-        u = (u + 1 + self.delta)%2 - 1 
-        q1, p1, V_q1 = self.leapfrog_Vq(q, p, N, step_size, V_q)
-        q, p, accepted, prob , u= self.metropolis([q, p], [q1, p1], u)
-        if accepted == 1: V_q = V_q1
-        return q, p, u, V_q, accepted, prob, [self.Hcount, self.Vgcount, self.leapcount]
-
-
-
-#####
-class DRGHMC(HMC):
-    '''DRHMC + GHMC
-    '''
-    def __init__(self, log_prob, grad_log_prob, alpha, invmetric_diag=None):
-        super(DRGHMC, self).__init__(log_prob, grad_log_prob, invmetric_diag=invmetric_diag)
-
-        self.alpha = alpha
-
-
-    def get_num(self, m, q, p, N, ss, fsub): 
-
-        avec = np.zeros(m)
-        H0 = self.H(q, p)    
-        for j in range(m):
-            fac = fsub**(j)
-            qj, pj = self.leapfrog(q, p, int(N*fac), ss/fac)
-            Hj = self.H(qj, pj)
-            pfac = np.exp(H0 - Hj)
-            if  (q - qj).sum()==0: 
-                pfac = 0.
-            if j:
-                den = np.prod(1-avec[:j])
-                num = self.get_num(j, qj, -pj, N, ss, fsub)
-                prob = pfac*num/den
-            else: 
-                prob = pfac
-            if np.isnan(prob) or np.isinf(prob): 
-                return 0. #np.nan
-            else: avec[j] = min(1., prob)
-            if np.prod(1-avec): pass
-            else: 
-                return np.prod(1-avec)
-        return np.prod(1-avec)
-
-
-    def multi_step(self, m, q0, N, ss, fsub):
-        
-        self.leapcount, self.Vgcount, self.Hcount = 0, 0, 0
-        p0 = np.random.normal(size=q0.size).reshape(q0.shape) * self.metricstd
-        avec = np.zeros(m)
-        H0 = self.H(q0, p0)
-        q1, p1 = self.leapfrog(q0, p0, N, ss)
-        H1 = self.H(q1, p1)
-        pfac = np.exp(H0 - H1)
-        prob = pfac
-        if np.isnan(prob) or np.isinf(prob) or (q0 - q1).sum()==0: 
-            prob = 0.
-        prob = min(1., prob)
-        avec[0] = prob
-        acc = np.random.uniform()
-        if  acc <= avec[0]: 
-            return q1, p1, 0, avec, [self.Hcount, self.Vgcount, self.leapcount]
-        else:
-            for j in range(1, m):
-                fac = fsub**(j)
-                qj, pj = self.leapfrog(q0, p0, int(N*fac), ss/fac)
-                Hj = self.H(qj, pj)
-                pfac = np.exp(H0 - Hj)
-                if  (q0 - qj).sum()==0:
-                    pfac = 0.
-                den = np.prod(1-avec[:j])
-                num = self.get_num(j, qj, -pj, N, ss, fsub)
-                prob = pfac*num/den
-                if np.isnan(prob) or np.isinf(prob): prob = 0.
-                avec[j] = min(1., prob)
-                acc = np.random.uniform()
-                if acc < avec[j]: 
-                    return qj, pj, j, avec, [self.Hcount, self.Vgcount, self.leapcount]
-            return q0, p0, -1, avec, [self.Hcount, self.Vgcount, self.leapcount]
-
-
-
-
-# class PyHMC_batch():
-    
-#     def __init__(self, log_prob, grad_log_prob, invmetric_diag=None):
-
-#         self.log_prob, self.grad_log_prob = log_prob, grad_log_prob
-#         self.V = lambda x : self.log_prob(x)*-1.
-#         #self.V_g = lambda x : self.grad_log_prob(x)*-1.
-#         self.leapcount, self.Vgcount, self.Hcount = 0, 0, 0
-
-#         if invmetric_diag is None: self.invmetric_diag = 1.
-#         else: self.invmetric_diag = invmetric_diag
-#         self.metricstd = self.invmetric_diag**-0.5
-
-#         self.KE = lambda p: np.sum(0.5*(p**2 * self.invmetric_diag), axis=tuple([i for i in range(1, len(p.shape))]))
-#         self.KE_g = lambda p: p * self.invmetric_diag
-    
-#     def V_g(self, x):
-#         self.Vgcount += 1
-#         return self.grad_log_prob(x)*-1.
-        
-#     def unit_norm_KE(self, p):
-#         return 0.5 * np.sum(p**2, axis=tuple([i for i in range(1, len(p.shape))]))
-
-#     def unit_norm_KE_g(self, p):
-#         return p
-
-#     def H(self, q,p):
-#         self.Hcount += 1
-#         return self.V(q) + self.KE(p)
-
-#     def leapfrog(self, q, p, N, step_size):
-#         self.leapcount += 1 
-#         q0, p0 = q, p
-#         try:
-#             p = p - 0.5*step_size * self.V_g(q) 
-#             for i in range(N-1):
-#                 q = q + step_size * self.KE_g(p)
-#                 p = p - step_size * self.V_g(q) 
-#             q = q + step_size * self.KE_g(p)
-#             p = p - 0.5*step_size * self.V_g(q) 
-#             return q, p
-#         except Exception as e:
-#             print(e)
-#             return q0, p0
-
-#     def metropolis(self, qp0, qp1):
-#         q0, p0 = qp0
-#         q1, p1 = qp1
-#         H0 = self.H(q0, p0)
-#         H1 = self.H(q1, p1)
-#         probs = np.exp(H0 - H1)
-#         print(probs)
-#         #prob = min(1., np.exp(H0 - H1))
-#         q2, p2 = [],[]
-#         acc = []
-#         for i, prob in enumerate(probs):
-#             if np.isnan(prob) or np.isinf(prob) or (q0-q1).sum()==0: 
-#                 q2.append(q0[i])
-#                 p2.append(p0[i])
-#                 acc.append(-1)
-#             elif np.random.uniform(0., 1., size=1) > min(1., prob):
-#                 q2.append(q0[i])
-#                 p2.append(p0[i])
-#                 acc.append(0)
-#             else: 
-#                 q2.append(q1[i])
-#                 p2.append(p1[i])
-#                 acc.append(1)
-#         return np.stack(q2, axis=0), \
-#             np.stack(p2, axis=0), \
-#             np.array(acc), [H0, H1]
-#         #else: return q1, p1, 1., [H0, H1]
-
-
-#     def hmc_step(self, q, N, step_size):
-#         self.leapcount, self.Vgcount, self.Hcount = 0, 0, 0
-#         p = np.random.normal(size=q.size).reshape(q.shape) * self.metricstd
-#         q1, p1 = self.leapfrog(q, p, N, step_size)
-#         print(q1.shape, p1.shape)
-#         q, p, accepted, prob = self.metropolis([q, p], [q1, p1])
-#         return q, p, accepted, prob, [self.Hcount, self.Vgcount, self.leapcount]
