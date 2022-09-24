@@ -18,6 +18,13 @@ class Sampler():
         for key in self.__dict__:
             if type(self.__dict__[key]) == np.ndarray:
                 self.__dict__[key] = list(self.__dict__[key])
+
+    def appends(self, q, acc, Hs, count):
+        self.i += 1
+        self.accepts.append(acc)
+        self.samples.append(q)
+        self.Hs.append(Hs)
+        self.counts.append(count)
         
     def save(self, path):
         pass
@@ -25,7 +32,8 @@ class Sampler():
 
 
 class DualAveragingStepSize():
-    def __init__(self, initial_step_size, target_accept=0.65, gamma=0.05, t0=10.0, kappa=0.75):
+    def __init__(self, initial_step_size, target_accept=0.65, gamma=0.05, t0=10.0, kappa=0.75, nadapt=0):
+        self.initial_step_size = initial_step_size 
         self.mu = np.log(10 * initial_step_size)  # proposals are biased upwards to stay away from 0.
         self.target_accept = target_accept
         self.gamma = gamma
@@ -33,29 +41,41 @@ class DualAveragingStepSize():
         self.kappa = kappa
         self.error_sum = 0
         self.log_averaged_step = 0
-
+        self.nadapt = nadapt
+        
     def update(self, p_accept):
+
+        if np.isnan(p_accept) : p_accept = 0.
+        if p_accept > 1: p_accept = 1. 
         # Running tally of absolute error. Can be positive or negative. Want to be 0.
         self.error_sum += self.target_accept - p_accept
-
         # This is the next proposed (log) step size. Note it is biased towards mu.
         log_step = self.mu - self.error_sum / (np.sqrt(self.t) * self.gamma)
- 
         # Forgetting rate. As `t` gets bigger, `eta` gets smaller.
         eta = self.t ** -self.kappa
-
         # Smoothed average step size
         self.log_averaged_step = eta * log_step + (1 - eta) * self.log_averaged_step
-
         # This is a stateful update, so t keeps updating
         self.t += 1
 
         # Return both the noisy step size, and the smoothed step size
         return np.exp(log_step), np.exp(self.log_averaged_step)
 
+    
+    def __call__(self, i, p_accept):
+        if i == 0:
+            return self.initial_step_size 
+        elif i < self.nadapt:
+            step_size, avgstepsize = self.update(p_accept)
+        elif i == self.nadapt:
+            _, step_size = self.update(p_accept)
+            print("\nStep size fixed to : %0.3e\n"%step_size)
+        else:
+            step_size = np.exp(self.log_averaged_step)
+        return step_size
 
-                
 
+    
 class HMC():
 
     def __init__(self, log_prob, grad_log_prob=None, log_prob_and_grad=None, invmetric_diag=None):
@@ -186,10 +206,12 @@ class HMC():
         self.nleap = kwargs['nleap']
 
 
-    def adapt_stepsize(self, q, epsadapt):
+    def adapt_stepsize(self, q, epsadapt, **kwargs):
         print("Adapting step size for %d iterations"%epsadapt)
         step_size = self.step_size
         epsadapt_kernel = DualAveragingStepSize(step_size)
+        self._parse_kwargs_sample(**kwargs)
+        
         for i in range(epsadapt+1):
             q, p, acc, Hs, count = self.step(q, self.nleap, step_size)
             prob = np.exp(Hs[0] - Hs[1])
@@ -212,7 +234,7 @@ class HMC():
         state = Sampler()
 
         if epsadapt:
-            q = self.adapt_stepsize(q, epsadapt)
+            q = self.adapt_stepsize(q, epsadapt, **kwargs)
             
         for i in range(self.nsamples + self.burnin):
             q, p, acc, Hs, count = self.step(q, self.nleap, self.step_size)
