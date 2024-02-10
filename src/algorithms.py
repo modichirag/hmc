@@ -45,8 +45,8 @@ class DualAveragingStepSize():
         
     def update(self, p_accept):
 
-        if np.isnan(p_accept) : p_accept = 0.
-        if p_accept > 1: p_accept = 1. 
+        if np.isnan(p_accept) or np.isinf(p_accept): p_accept = 0.
+        if p_accept > 1: p_accept = 1.
         # Running tally of absolute error. Can be positive or negative. Want to be 0.
         self.error_sum += self.target_accept - p_accept
         # This is the next proposed (log) step size. Note it is biased towards mu.
@@ -213,8 +213,12 @@ class HMC():
         self._parse_kwargs_sample(**kwargs)
         
         for i in range(epsadapt+1):
+            qprev = q.copy()
             q, p, acc, Hs, count = self.step(q, self.nleap, step_size)
-            prob = np.exp(Hs[0] - Hs[1])
+            if (qprev == q).all():
+                prob = 0 
+            else:
+                prob = np.exp(Hs[0] - Hs[1])
             if i < epsadapt:
                 if np.isnan(prob): prob = 0.
                 if prob > 1: prob = 1.
